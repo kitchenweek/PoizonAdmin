@@ -434,9 +434,12 @@ async def start_command(message: types.Message, state: FSMContext):
     add_user(user_id, username, full_name)
     
     await message.answer(
-        "🔄 Бот перезапущен!\n\n"
-        "👋 Добро пожаловать в игру Мамонты!\n"
-        "Выберите действие в меню:",
+        "👋 Добро пожаловать в главное меню!\n\n"
+        "Используй кнопки, чтобы:\n"
+        "🦣 Ввести тег мамонта\n"
+        "🔎 Проверить мамонтов\n"
+        "📊 Посмотреть свою статистику\n\n"
+        "Также сюда приходят уведомления о профите 💰",
         reply_markup=get_main_keyboard(user_id)
     )
 
