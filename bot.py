@@ -367,6 +367,74 @@ def get_team_stats():
     conn.close()
     return stats
 
+# Функция для получения статистики за неделю по всей команде
+def get_team_weekly_stats():
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    
+    week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    
+    stats = {
+        'daily': [],
+        'total_profit': 0,
+        'total_payments': 0,
+        'new_clients': 0,
+        'unsubscribed': 0,
+        'active_workers': 0
+    }
+    
+    # Получаем платежи за неделю по дням
+    cursor.execute('''
+    SELECT DATE(payment_date), SUM(profit), SUM(amount_usd)
+    FROM payments 
+    WHERE payment_date > ?
+    GROUP BY DATE(payment_date)
+    ORDER BY DATE(payment_date) DESC
+    ''', (week_ago,))
+    daily = cursor.fetchall()
+    
+    for day in daily:
+        stats['daily'].append({
+            'date': day[0],
+            'profit': day[1] if day[1] else 0,
+            'payments': day[2] if day[2] else 0
+        })
+    
+    # Общая сумма за неделю
+    cursor.execute("SELECT SUM(profit), SUM(amount_usd) FROM payments WHERE payment_date > ?", (week_ago,))
+    result = cursor.fetchone()
+    stats['total_profit'] = result[0] if result[0] else 0
+    stats['total_payments'] = result[1] if result[1] else 0
+    
+    # Новые клиенты за неделю
+    cursor.execute("SELECT COUNT(*) FROM tags WHERE created_at > ?", (week_ago,))
+    stats['new_clients'] = cursor.fetchone()[0]
+    
+    # Отписавшиеся за неделю
+    cursor.execute("SELECT COUNT(*) FROM unsubscribed WHERE unsubscribed_date > ?", (week_ago,))
+    stats['unsubscribed'] = cursor.fetchone()[0]
+    
+    # Активные воркеры
+    cursor.execute("SELECT COUNT(DISTINCT user_id) FROM tags WHERE is_active = 1")
+    stats['active_workers'] = cursor.fetchone()[0]
+    
+    conn.close()
+    return stats
+
+# Функция для получения мамонтов с истекающим сроком
+def get_expiring_tags(user_id):
+    today = datetime.now().strftime("%d.%m")
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+    SELECT tag, deadline 
+    FROM tags 
+    WHERE user_id = ? AND is_active = 1 AND deadline = ?
+    ''', (user_id, today))
+    tags = cursor.fetchall()
+    conn.close()
+    return tags
+
 # Функции для пагинации
 def paginate_items(items, page, per_page=20):
     total_pages = math.ceil(len(items) / per_page)
@@ -420,7 +488,10 @@ def get_main_keyboard(user_id):
             KeyboardButton("🔍 Проверить тег"),
             KeyboardButton("💸 Списать переведенных")
         ]
-        buttons_row5 = [KeyboardButton("📊 Личная статистика")]
+        buttons_row5 = [
+            KeyboardButton("📊 Личная статистика"),
+            KeyboardButton("📈 Статистика за неделю")
+        ]
         
         keyboard.row(*buttons_row1)
         keyboard.row(*buttons_row2)
@@ -457,7 +528,6 @@ async def back_to_menu(message: types.Message, state: FSMContext):
 async def send_reminder():
     while True:
         now = datetime.now(TIMEZONE)
-        # Проверяем рабочее время (10:00 - 22:00)
         if 10 <= now.hour < 22:
             try:
                 await bot.send_message(
@@ -468,7 +538,39 @@ async def send_reminder():
                 )
             except Exception as e:
                 logging.error(f"Ошибка отправки напоминания: {e}")
-        await asyncio.sleep(1800)  # 30 минут
+        await asyncio.sleep(1800)
+
+# Функция для проверки дедлайнов
+async def check_deadlines():
+    while True:
+        now = datetime.now(TIMEZONE)
+        if now.hour == 10 and now.minute == 0:
+            try:
+                today = now.strftime("%d.%m")
+                conn = sqlite3.connect('bot_database.db')
+                cursor = conn.cursor()
+                cursor.execute('''
+                SELECT DISTINCT u.user_id, u.username 
+                FROM tags t 
+                JOIN users u ON t.user_id = u.user_id 
+                WHERE t.deadline = ? AND t.is_active = 1
+                ''', (today,))
+                workers = cursor.fetchall()
+                conn.close()
+                
+                for worker_id, username in workers:
+                    tags = get_expiring_tags(worker_id)
+                    if tags:
+                        text = f"🔔 Напоминание о дедлайне!\n\n"
+                        text += f"🦣 У тебя заканчивается срок у мамонтов:\n\n"
+                        for tag, deadline in tags:
+                            text += f"• {tag} (срок: {deadline})\n"
+                        text += f"\n📢 Не забудь напомнить мамонту о промокоде!"
+                        
+                        await bot.send_message(worker_id, text)
+            except Exception as e:
+                logging.error(f"Ошибка проверки дедлайнов: {e}")
+        await asyncio.sleep(60)
 
 # Обработчики команд
 @dp.message_handler(commands=["start"])
@@ -491,10 +593,137 @@ async def start_command(message: types.Message, state: FSMContext):
         reply_markup=get_main_keyboard(user_id)
     )
 
-@dp.message_handler(state='*', commands=["start"])
-async def start_state_handler(message: types.Message, state: FSMContext):
+@dp.message_handler(commands=["stats"])
+async def stats_command(message: types.Message, state: FSMContext):
     await state.finish()
-    await start_command(message, state)
+    await personal_stats(message)
+
+@dp.message_handler(commands=["top"])
+async def top_command(message: types.Message):
+    user_id = message.from_user.id
+    user = get_user(user_id)
+    
+    if not user or not user[3]:
+        await message.answer("❌ У вас нет прав для этого действия!")
+        return
+    
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+    SELECT u.username, 
+           COUNT(t.id) as clients,
+           SUM(p.amount_usd) as total_usd
+    FROM users u
+    JOIN tags t ON u.user_id = t.user_id
+    LEFT JOIN payments p ON t.id = p.tag_id
+    WHERE t.is_active = 1
+    GROUP BY u.user_id
+    ORDER BY total_usd DESC
+    LIMIT 10
+    ''')
+    top = cursor.fetchall()
+    conn.close()
+    
+    if not top:
+        await message.answer("📊 Пока нет данных для рейтинга.")
+        return
+    
+    text = "🏆 ТОП воркеров по профитам:\n\n"
+    medals = ["🥇", "🥈", "🥉"]
+    for i, (username, clients, total) in enumerate(top, 1):
+        medal = medals[i-1] if i <= 3 else f"{i}."
+        text += f"{medal} @{username} - {total:.2f}$ ({clients} мамонтов)\n"
+    
+    await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
+
+@dp.message_handler(commands=["add"])
+async def add_command(message: types.Message):
+    args = message.get_args()
+    if not args:
+        await message.answer(
+            "❌ Использование: /add @user ДД.ММ\n"
+            "Пример: /add @username 31.12"
+        )
+        return
+    
+    parts = args.split()
+    if len(parts) < 2:
+        await message.answer("❌ Неверный формат! Используйте: /add @user ДД.ММ")
+        return
+    
+    tag = parts[0]
+    if not tag.startswith('@'):
+        await message.answer("❌ Тег должен начинаться с @")
+        return
+    
+    deadline = ' '.join(parts[1:])
+    try:
+        datetime.strptime(deadline, "%d.%m")
+    except ValueError:
+        await message.answer("❌ Неверный формат даты! Используйте ДД.ММ")
+        return
+    
+    existing_tag = get_tag_by_name(tag)
+    if existing_tag:
+        await message.answer("❌ Такой тег уже существует!")
+        return
+    
+    user_id = message.from_user.id
+    add_tag(user_id, tag, deadline)
+    
+    await message.answer(
+        f"✅ Мамонт {tag} успешно добавлен!\n"
+        f"📅 Срок: {deadline}",
+        reply_markup=get_main_keyboard(user_id)
+    )
+
+@dp.message_handler(commands=["check"])
+async def check_command(message: types.Message):
+    user_id = message.from_user.id
+    user = get_user(user_id)
+    
+    if not user or not user[3]:
+        await message.answer("❌ У вас нет прав для этого действия!")
+        return
+    
+    args = message.get_args()
+    if not args:
+        await message.answer("❌ Использование: /check @user")
+        return
+    
+    tag_name = args.strip()
+    tag_info = get_tag_info(tag_name)
+    
+    if not tag_info:
+        await message.answer("❌ Тег не найден в базе данных!")
+        return
+    
+    tag, deadline, username, user_id, is_unsubscribed = tag_info
+    status = "✅ Отписался" if is_unsubscribed else "❌ Не отписался"
+    
+    await message.answer(
+        f"🔍 Информация о теге:\n\n"
+        f"📌 Тег: {tag}\n"
+        f"📅 Срок: {deadline}\n"
+        f"👤 Воркер: @{username}\n"
+        f"📊 Статус: {status}",
+        reply_markup=get_main_keyboard(message.from_user.id)
+    )
+
+@dp.message_handler(state='*', commands=["start", "stats", "top", "add", "check"])
+async def command_state_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    command = message.get_command()
+    if command == "/start":
+        await start_command(message, state)
+    elif command == "/stats":
+        await personal_stats(message)
+    elif command == "/top":
+        await top_command(message)
+    elif command == "/add":
+        await add_command(message)
+    elif command == "/check":
+        await check_command(message)
 
 @dp.message_handler(lambda message: message.text == "📝 Добавить мамонта")
 async def add_tag_start(message: types.Message):
@@ -650,7 +879,6 @@ async def admin_process_message(message: types.Message, state: FSMContext):
     user_id = cursor.fetchone()[0]
     conn.close()
     
-    # Отправляем уведомление воркеру
     notification = f"💰 Новый профит!\n\n"
     notification += f"🦣 Тег мамонта: {tag_name}\n"
     notification += f"💵 Сумма: {amount_rub:.0f}₽\n"
@@ -1034,8 +1262,41 @@ async def personal_stats(message: types.Message):
     text += f"💵 Сумма профитов: ${stats['total_profit_usd']:.2f}\n"
     text += f"🦣 Количество мамонтов: {stats['clients_count']}\n"
     text += f"📝 Количество переведенных: {stats['unsubscribed_count']}\n"
-    text += f"🗂️ Баланс за переведенных: ${stats['refund_amount']:.2f}\n"
+    text += f"🗂️ Оплата за переведенных: ${stats['refund_amount']:.2f}\n"
     text += f"💸 Заработок с переведенных: ${stats['total_payoffs']:.2f}"
+    
+    await message.answer(text, reply_markup=get_main_keyboard(user_id))
+
+@dp.message_handler(lambda message: message.text == "📈 Статистика за неделю")
+async def team_weekly_stats(message: types.Message):
+    user_id = message.from_user.id
+    user = get_user(user_id)
+    
+    if not user or not user[3]:
+        await message.answer("❌ У вас нет прав для этого действия!")
+        return
+    
+    stats = get_team_weekly_stats()
+    
+    text = f"📈 Статистика команды за неделю:\n\n"
+    
+    if stats['daily']:
+        for day in stats['daily'][:7]:
+            date = datetime.strptime(day['date'], "%Y-%m-%d").strftime("%d.%m")
+            profit = day['profit']
+            payments = day['payments']
+            bars = int(profit / 5) if profit > 0 else 0
+            bar_str = "█" * min(bars, 40)
+            text += f"📅 {date}: {profit:.2f}$ {bar_str}\n"
+    else:
+        text += "За неделю нет данных.\n"
+    
+    text += f"\n📊 Итого за неделю:\n"
+    text += f"👥 Активных воркеров: {stats['active_workers']}\n"
+    text += f"💰 Общий профит: ${stats['total_profit']:.2f}\n"
+    text += f"💵 Общая сумма оплат: ${stats['total_payments']:.2f}\n"
+    text += f"🦣 Новых мамонтов: {stats['new_clients']}\n"
+    text += f"📝 Отписавшихся: {stats['unsubscribed']}"
     
     await message.answer(text, reply_markup=get_main_keyboard(user_id))
 
@@ -1082,8 +1343,8 @@ if __name__ == "__main__":
     init_db()
     print("🚀 Бот запущен!")
     
-    # Запускаем задачу с напоминаниями
     loop = asyncio.get_event_loop()
     loop.create_task(send_reminder())
+    loop.create_task(check_deadlines())
     
     executor.start_polling(dp, skip_updates=True)
