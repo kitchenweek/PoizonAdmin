@@ -264,8 +264,8 @@ def get_user_stats(user_id):
         'total_profit_rub': 0,
         'clients_count': len(tags),
         'unsubscribed_count': 0,
-        'balance': 0,  # Актуальный баланс (остаток)
-        'total_payoffs': 0  # Общая сумма списаний (заработок)
+        'balance': 0,
+        'total_payoffs': 0
     }
     
     if tag_ids:
@@ -290,12 +290,10 @@ def get_user_stats(user_id):
         cursor.execute(f"SELECT COUNT(*) FROM unsubscribed WHERE tag_id IN ({placeholders})", tag_ids)
         stats['unsubscribed_count'] = cursor.fetchone()[0]
     
-    # Общая сумма списаний (заработок с переведенных)
     cursor.execute("SELECT SUM(amount) FROM payoffs WHERE user_id = ?", (user_id,))
     result = cursor.fetchone()[0]
     stats['total_payoffs'] = result if result else 0
     
-    # Актуальный баланс = (количество переведенных × 0.4) - списания
     total_earned = stats['unsubscribed_count'] * 0.4
     stats['balance'] = total_earned - stats['total_payoffs']
     
@@ -315,10 +313,13 @@ def get_worker_unsubscribed_amount(user_id):
         placeholders = ','.join('?' * len(tag_ids))
         cursor.execute(f"SELECT COUNT(*) FROM unsubscribed WHERE tag_id IN ({placeholders})", tag_ids)
         count = cursor.fetchone()[0]
-        amount = count * 0.4  # 0.4$ за каждого переведенного
+        amount = count * 0.4
+    else:
+        count = 0
+        amount = 0
     
     conn.close()
-    return amount
+    return amount, count  # возвращаем сумму и количество
 
 def add_payoff(user_id, amount):
     conn = sqlite3.connect('bot_database.db')
@@ -370,7 +371,6 @@ def get_team_stats():
     conn.close()
     return stats
 
-# Функция для получения статистики за неделю по всей команде
 def get_team_weekly_stats():
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
@@ -419,7 +419,6 @@ def get_team_weekly_stats():
     conn.close()
     return stats
 
-# Функция для получения мамонтов с истекающим сроком
 def get_expiring_tags(user_id):
     today = datetime.now().strftime("%d.%m")
     conn = sqlite3.connect('bot_database.db')
@@ -433,7 +432,6 @@ def get_expiring_tags(user_id):
     conn.close()
     return tags
 
-# Функции для пагинации
 def paginate_items(items, page, per_page=20):
     total_pages = math.ceil(len(items) / per_page)
     if page < 1:
@@ -466,7 +464,6 @@ def get_pagination_keyboard(current_page, total_pages):
     keyboard.row(InlineKeyboardButton("❌ Закрыть", callback_data="close"))
     return keyboard
 
-# Меню
 def get_main_keyboard(user_id):
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
     user = get_user(user_id)
@@ -507,7 +504,6 @@ def get_main_keyboard(user_id):
     
     return keyboard
 
-# Обработчик кнопки "Назад"
 @dp.message_handler(lambda message: message.text == "◀️ Назад")
 async def back_to_menu(message: types.Message, state: FSMContext):
     await state.finish()
@@ -522,7 +518,6 @@ async def back_to_menu(message: types.Message, state: FSMContext):
         reply_markup=get_main_keyboard(user_id)
     )
 
-# Функция для отправки напоминания админу (каждые 30 минут с 10:00 до 22:00)
 async def send_reminder():
     while True:
         now = datetime.now(TIMEZONE)
@@ -538,7 +533,6 @@ async def send_reminder():
                 logging.error(f"Ошибка отправки напоминания: {e}")
         await asyncio.sleep(1800)
 
-# Функция для проверки дедлайнов
 async def check_deadlines():
     while True:
         now = datetime.now(TIMEZONE)
@@ -635,16 +629,44 @@ async def top_command(message: types.Message):
     await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
 
 @dp.message_handler(commands=["add"])
-async def add_command(message: types.Message, state: FSMContext):
-    await state.finish()
-    await AddTagStates.waiting_for_tag_and_deadline.set()
-    back_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
-    back_keyboard.add(KeyboardButton("◀️ Назад"))
+async def add_command(message: types.Message):
+    args = message.get_args()
+    if not args:
+        await message.answer(
+            "❌ Использование: /add @user ДД.ММ\n"
+            "Пример: /add @username 31.12"
+        )
+        return
+    
+    parts = args.split()
+    if len(parts) < 2:
+        await message.answer("❌ Неверный формат! Используйте: /add @user ДД.ММ")
+        return
+    
+    tag = parts[0]
+    if not tag.startswith('@'):
+        await message.answer("❌ Тег должен начинаться с @")
+        return
+    
+    deadline = ' '.join(parts[1:])
+    try:
+        datetime.strptime(deadline, "%d.%m")
+    except ValueError:
+        await message.answer("❌ Неверный формат даты! Используйте ДД.ММ")
+        return
+    
+    existing_tag = get_tag_by_name(tag)
+    if existing_tag:
+        await message.answer("❌ Такой тег уже существует!")
+        return
+    
+    user_id = message.from_user.id
+    add_tag(user_id, tag, deadline)
+    
     await message.answer(
-        "Введите тег мамонта и срок одним сообщением:\n"
-        "Формат: @user ДД.ММ\n"
-        "Пример: @username 31.12",
-        reply_markup=back_keyboard
+        f"✅ Мамонт {tag} успешно добавлен!\n"
+        f"📅 Срок: {deadline}",
+        reply_markup=get_main_keyboard(user_id)
     )
 
 @dp.message_handler(commands=["check"])
@@ -691,7 +713,7 @@ async def command_state_handler(message: types.Message, state: FSMContext):
     elif command == "/top":
         await top_command(message)
     elif command == "/add":
-        await add_command(message, state)
+        await add_command(message)
     elif command == "/check":
         await check_command(message)
 
@@ -1129,12 +1151,16 @@ async def payoff_process_worker(message: types.Message, state: FSMContext):
         return
     
     worker_id, worker_username = worker
-    amount = get_worker_unsubscribed_amount(worker_id)
     
-    if amount == 0:
+    # Получаем актуальный баланс
+    stats = get_user_stats(worker_id)
+    balance = stats['balance']
+    unsubscribed_count = stats['unsubscribed_count']
+    
+    if balance <= 0:
         await message.answer(
-            f"📊 У воркера @{worker_username} нет отписавшихся мамонтов.\n"
-            f"Сумма к списанию: 0$"
+            f"📊 У воркера @{worker_username} нет средств для списания.\n"
+            f"Баланс за переведенных: 0$"
         )
         await state.finish()
         await message.answer(
@@ -1148,7 +1174,7 @@ async def payoff_process_worker(message: types.Message, state: FSMContext):
         )
         return
     
-    await state.update_data(worker_id=worker_id, worker_username=worker_username, amount=amount)
+    await state.update_data(worker_id=worker_id, worker_username=worker_username, amount=balance, unsubscribed_count=unsubscribed_count)
     await PayoffState.waiting_for_confirmation.set()
     
     keyboard = InlineKeyboardMarkup(row_width=2)
@@ -1160,8 +1186,8 @@ async def payoff_process_worker(message: types.Message, state: FSMContext):
     await message.answer(
         f"📊 Информация о списании:\n\n"
         f"👤 Воркер: @{worker_username}\n"
-        f"🦣 Отписавшихся мамонтов: {int(amount/0.4)}\n"
-        f"💲 Сумма к списанию: {amount:.2f}$\n\n"
+        f"🦣 Отписавшихся мамонтов: {unsubscribed_count}\n"
+        f"💲 Баланс к списанию: {balance:.2f}$\n\n"
         f"Подтвердите списание:",
         reply_markup=keyboard
     )
