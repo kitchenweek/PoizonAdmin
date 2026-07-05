@@ -418,7 +418,12 @@ async def back_to_menu(message: types.Message, state: FSMContext):
     await state.finish()
     user_id = message.from_user.id
     await message.answer(
-        "📋 Главное меню:",
+        "👋 Добро пожаловать в главное меню!\n\n"
+        "Используй кнопки, чтобы:\n"
+        "🦣 Ввести тег мамонта\n"
+        "🔎 Проверить мамонтов\n"
+        "📊 Посмотреть свою статистику\n\n"
+        "Также сюда приходят уведомления о профите 💰",
         reply_markup=get_main_keyboard(user_id)
     )
 
@@ -744,7 +749,16 @@ async def close_callback(callback_query: types.CallbackQuery, state: FSMContext)
     await callback_query.message.delete()
     await state.finish()
     user_id = callback_query.from_user.id
-    await bot.send_message(user_id, "📋 Главное меню:", reply_markup=get_main_keyboard(user_id))
+    await bot.send_message(
+        user_id, 
+        "👋 Добро пожаловать в главное меню!\n\n"
+        "Используй кнопки, чтобы:\n"
+        "🦣 Ввести тег мамонта\n"
+        "🔎 Проверить мамонтов\n"
+        "📊 Посмотреть свою статистику\n\n"
+        "Также сюда приходят уведомления о профите 💰",
+        reply_markup=get_main_keyboard(user_id)
+    )
     await callback_query.answer()
 
 @dp.message_handler(lambda message: message.text == "🔍 Проверить тег")
@@ -774,7 +788,15 @@ async def check_tag_process(message: types.Message, state: FSMContext):
     if not tag_info:
         await message.answer("❌ Тег не найден в базе данных!")
         await state.finish()
-        await message.answer("📋 Главное меню:", reply_markup=get_main_keyboard(message.from_user.id))
+        await message.answer(
+            "👋 Добро пожаловать в главное меню!\n\n"
+            "Используй кнопки, чтобы:\n"
+            "🦣 Ввести тег мамонта\n"
+            "🔎 Проверить мамонтов\n"
+            "📊 Посмотреть свою статистику\n\n"
+            "Также сюда приходят уведомления о профите 💰",
+            reply_markup=get_main_keyboard(message.from_user.id)
+        )
         return
     
     tag, deadline, username, user_id, is_unsubscribed = tag_info
@@ -838,7 +860,15 @@ async def payoff_process_worker(message: types.Message, state: FSMContext):
             f"Сумма к списанию: 0$"
         )
         await state.finish()
-        await message.answer("📋 Главное меню:", reply_markup=get_main_keyboard(message.from_user.id))
+        await message.answer(
+            "👋 Добро пожаловать в главное меню!\n\n"
+            "Используй кнопки, чтобы:\n"
+            "🦣 Ввести тег мамонта\n"
+            "🔎 Проверить мамонтов\n"
+            "📊 Посмотреть свою статистику\n\n"
+            "Также сюда приходят уведомления о профите 💰",
+            reply_markup=get_main_keyboard(message.from_user.id)
+        )
         return
     
     await state.update_data(worker_id=worker_id, worker_username=worker_username, amount=amount)
@@ -891,14 +921,32 @@ async def confirm_payoff(callback_query: types.CallbackQuery, state: FSMContext)
     )
     
     await callback_query.answer("✅ Списание подтверждено!")
-    await bot.send_message(callback_query.from_user.id, "📋 Главное меню:", reply_markup=get_main_keyboard(callback_query.from_user.id))
+    await bot.send_message(
+        callback_query.from_user.id, 
+        "👋 Добро пожаловать в главное меню!\n\n"
+        "Используй кнопки, чтобы:\n"
+        "🦣 Ввести тег мамонта\n"
+        "🔎 Проверить мамонтов\n"
+        "📊 Посмотреть свою статистику\n\n"
+        "Также сюда приходят уведомления о профите 💰",
+        reply_markup=get_main_keyboard(callback_query.from_user.id)
+    )
 
 @dp.callback_query_handler(lambda c: c.data == "cancel_payoff", state=PayoffState.waiting_for_confirmation)
 async def cancel_payoff(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish()
     await callback_query.message.edit_text("❌ Списание отменено.")
     await callback_query.answer()
-    await bot.send_message(callback_query.from_user.id, "📋 Главное меню:", reply_markup=get_main_keyboard(callback_query.from_user.id))
+    await bot.send_message(
+        callback_query.from_user.id, 
+        "👋 Добро пожаловать в главное меню!\n\n"
+        "Используй кнопки, чтобы:\n"
+        "🦣 Ввести тег мамонта\n"
+        "🔎 Проверить мамонтов\n"
+        "📊 Посмотреть свою статистику\n\n"
+        "Также сюда приходят уведомления о профите 💰",
+        reply_markup=get_main_keyboard(callback_query.from_user.id)
+    )
 
 @dp.message_handler(lambda message: message.text == "📈 Личная статистика")
 async def personal_stats(message: types.Message):
@@ -948,3 +996,4 @@ async def handle_all_states(message: types.Message, state: FSMContext):
 if __name__ == "__main__":
     init_db()
     print("🚀 Бот запущен!")
+    executor.start_polling(dp, skip_updates=True)
