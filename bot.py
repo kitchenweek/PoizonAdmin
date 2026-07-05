@@ -264,8 +264,8 @@ def get_user_stats(user_id):
         'total_profit_rub': 0,
         'clients_count': len(tags),
         'unsubscribed_count': 0,
-        'refund_amount': 0,
-        'total_payoffs': 0
+        'balance': 0,  # Актуальный баланс (остаток)
+        'total_payoffs': 0  # Общая сумма списаний (заработок)
     }
     
     if tag_ids:
@@ -289,12 +289,15 @@ def get_user_stats(user_id):
         
         cursor.execute(f"SELECT COUNT(*) FROM unsubscribed WHERE tag_id IN ({placeholders})", tag_ids)
         stats['unsubscribed_count'] = cursor.fetchone()[0]
-        
-        stats['refund_amount'] = stats['unsubscribed_count'] * 0.5
     
+    # Общая сумма списаний (заработок с переведенных)
     cursor.execute("SELECT SUM(amount) FROM payoffs WHERE user_id = ?", (user_id,))
     result = cursor.fetchone()[0]
     stats['total_payoffs'] = result if result else 0
+    
+    # Актуальный баланс = (количество переведенных × 0.4) - списания
+    total_earned = stats['unsubscribed_count'] * 0.4
+    stats['balance'] = total_earned - stats['total_payoffs']
     
     conn.close()
     return stats
@@ -312,7 +315,7 @@ def get_worker_unsubscribed_amount(user_id):
         placeholders = ','.join('?' * len(tag_ids))
         cursor.execute(f"SELECT COUNT(*) FROM unsubscribed WHERE tag_id IN ({placeholders})", tag_ids)
         count = cursor.fetchone()[0]
-        amount = count * 0.5
+        amount = count * 0.4  # 0.4$ за каждого переведенного
     
     conn.close()
     return amount
@@ -383,7 +386,6 @@ def get_team_weekly_stats():
         'active_workers': 0
     }
     
-    # Получаем платежи за неделю по дням
     cursor.execute('''
     SELECT DATE(payment_date), SUM(profit), SUM(amount_usd)
     FROM payments 
@@ -400,21 +402,17 @@ def get_team_weekly_stats():
             'payments': day[2] if day[2] else 0
         })
     
-    # Общая сумма за неделю
     cursor.execute("SELECT SUM(profit), SUM(amount_usd) FROM payments WHERE payment_date > ?", (week_ago,))
     result = cursor.fetchone()
     stats['total_profit'] = result[0] if result[0] else 0
     stats['total_payments'] = result[1] if result[1] else 0
     
-    # Новые клиенты за неделю
     cursor.execute("SELECT COUNT(*) FROM tags WHERE created_at > ?", (week_ago,))
     stats['new_clients'] = cursor.fetchone()[0]
     
-    # Отписавшиеся за неделю
     cursor.execute("SELECT COUNT(*) FROM unsubscribed WHERE unsubscribed_date > ?", (week_ago,))
     stats['unsubscribed'] = cursor.fetchone()[0]
     
-    # Активные воркеры
     cursor.execute("SELECT COUNT(DISTINCT user_id) FROM tags WHERE is_active = 1")
     stats['active_workers'] = cursor.fetchone()[0]
     
@@ -524,7 +522,7 @@ async def back_to_menu(message: types.Message, state: FSMContext):
         reply_markup=get_main_keyboard(user_id)
     )
 
-# Функция для отправки напоминания админу
+# Функция для отправки напоминания админу (каждые 30 минут с 10:00 до 22:00)
 async def send_reminder():
     while True:
         now = datetime.now(TIMEZONE)
@@ -637,44 +635,16 @@ async def top_command(message: types.Message):
     await message.answer(text, reply_markup=get_main_keyboard(message.from_user.id))
 
 @dp.message_handler(commands=["add"])
-async def add_command(message: types.Message):
-    args = message.get_args()
-    if not args:
-        await message.answer(
-            "❌ Использование: /add @user ДД.ММ\n"
-            "Пример: /add @username 31.12"
-        )
-        return
-    
-    parts = args.split()
-    if len(parts) < 2:
-        await message.answer("❌ Неверный формат! Используйте: /add @user ДД.ММ")
-        return
-    
-    tag = parts[0]
-    if not tag.startswith('@'):
-        await message.answer("❌ Тег должен начинаться с @")
-        return
-    
-    deadline = ' '.join(parts[1:])
-    try:
-        datetime.strptime(deadline, "%d.%m")
-    except ValueError:
-        await message.answer("❌ Неверный формат даты! Используйте ДД.ММ")
-        return
-    
-    existing_tag = get_tag_by_name(tag)
-    if existing_tag:
-        await message.answer("❌ Такой тег уже существует!")
-        return
-    
-    user_id = message.from_user.id
-    add_tag(user_id, tag, deadline)
-    
+async def add_command(message: types.Message, state: FSMContext):
+    await state.finish()
+    await AddTagStates.waiting_for_tag_and_deadline.set()
+    back_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    back_keyboard.add(KeyboardButton("◀️ Назад"))
     await message.answer(
-        f"✅ Мамонт {tag} успешно добавлен!\n"
-        f"📅 Срок: {deadline}",
-        reply_markup=get_main_keyboard(user_id)
+        "Введите тег мамонта и срок одним сообщением:\n"
+        "Формат: @user ДД.ММ\n"
+        "Пример: @username 31.12",
+        reply_markup=back_keyboard
     )
 
 @dp.message_handler(commands=["check"])
@@ -721,7 +691,7 @@ async def command_state_handler(message: types.Message, state: FSMContext):
     elif command == "/top":
         await top_command(message)
     elif command == "/add":
-        await add_command(message)
+        await add_command(message, state)
     elif command == "/check":
         await check_command(message)
 
@@ -1190,7 +1160,7 @@ async def payoff_process_worker(message: types.Message, state: FSMContext):
     await message.answer(
         f"📊 Информация о списании:\n\n"
         f"👤 Воркер: @{worker_username}\n"
-        f"🦣 Отписавшихся мамонтов: {int(amount/0.5)}\n"
+        f"🦣 Отписавшихся мамонтов: {int(amount/0.4)}\n"
         f"💲 Сумма к списанию: {amount:.2f}$\n\n"
         f"Подтвердите списание:",
         reply_markup=keyboard
@@ -1262,7 +1232,7 @@ async def personal_stats(message: types.Message):
     text += f"💵 Сумма профитов: ${stats['total_profit_usd']:.2f}\n"
     text += f"🦣 Количество мамонтов: {stats['clients_count']}\n"
     text += f"📝 Количество переведенных: {stats['unsubscribed_count']}\n"
-    text += f"🗂️ Оплата за переведенных: ${stats['refund_amount']:.2f}\n"
+    text += f"🗂️ Баланс за переведенных: ${stats['balance']:.2f}\n"
     text += f"💸 Заработок с переведенных: ${stats['total_payoffs']:.2f}"
     
     await message.answer(text, reply_markup=get_main_keyboard(user_id))
