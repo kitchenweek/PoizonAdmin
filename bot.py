@@ -103,9 +103,34 @@ def init_db():
     )
     ''')
     
+    # Добавляем поле для времени последнего обновления
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )
+    ''')
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('last_update', '')")
+    
     cursor.execute("INSERT OR IGNORE INTO users (user_id, username, is_admin) VALUES (?, ?, ?)", 
                   (ADMIN_ID, "admin", 1))
     
+    conn.commit()
+    conn.close()
+
+# Функции для работы с настройками
+def get_last_update_time():
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = 'last_update'")
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else ''
+
+def set_last_update_time(time_str):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE settings SET value = ? WHERE key = 'last_update'", (time_str,))
     conn.commit()
     conn.close()
 
@@ -197,6 +222,8 @@ def add_unsubscribed(tag_id):
                   (tag_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     conn.close()
+    # Обновляем время последнего обновления
+    set_last_update_time(datetime.now(TIMEZONE).strftime("%H:%M"))
 
 def get_unsubscribed_tags():
     conn = sqlite3.connect('bot_database.db')
@@ -412,7 +439,7 @@ def get_main_keyboard(user_id):
     
     return keyboard
 
-# Обработчик кнопки "Назад" (возврат в меню)
+# Обработчик кнопки "Назад"
 @dp.message_handler(lambda message: message.text == "◀️ Назад" or message.text == "Назад")
 async def back_to_menu(message: types.Message, state: FSMContext):
     await state.finish()
@@ -426,6 +453,34 @@ async def back_to_menu(message: types.Message, state: FSMContext):
         "Также сюда приходят уведомления о профите 💰",
         reply_markup=get_main_keyboard(user_id)
     )
+
+# Обработчик для прерывания состояний при нажатии на кнопки
+@dp.message_handler(lambda message: message.text in ["📝 Добавить мамонта", "💰 Добавить профит", "📌 Отметить отписку", "👥 Мои мамонты", "🔍 Проверить тег", "💸 Списать переведенных", "📈 Личная статистика", "📊 Статистика команды"], state='*')
+async def interrupt_state(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is not None:
+        await state.finish()
+        # Передаем управление дальше
+        await process_button(message, state)
+
+async def process_button(message: types.Message, state: FSMContext):
+    text = message.text
+    if text == "📝 Добавить мамонта":
+        await add_tag_start(message)
+    elif text == "💰 Добавить профит":
+        await admin_add_profit_start(message)
+    elif text == "📌 Отметить отписку":
+        await mark_unsubscribed_start(message, state)
+    elif text == "👥 Мои мамонты":
+        await view_all_clients(message, state)
+    elif text == "🔍 Проверить тег":
+        await check_tag_start(message)
+    elif text == "💸 Списать переведенных":
+        await payoff_start(message)
+    elif text == "📈 Личная статистика":
+        await personal_stats(message)
+    elif text == "📊 Статистика команды":
+        await team_stats(message)
 
 # Обработчики команд
 @dp.message_handler(commands=["start"])
@@ -674,9 +729,13 @@ async def view_all_clients(message: types.Message, state: FSMContext):
     await state.update_data(clients_list=tags)
     await ClientListState.viewing.set()
     
-    moscow_time = datetime.now(TIMEZONE).strftime("%H:%M")
+    # Получаем время последнего обновления
+    last_update = get_last_update_time()
+    if not last_update:
+        last_update = "еще не обновлялось"
+    
     page = 1
-    await send_clients_page(message, user_id, tags, page, moscow_time)
+    await send_clients_page(message, user_id, tags, page, last_update)
 
 async def send_clients_page(message_or_callback, user_id, tags, page, update_time):
     items, page, total_pages = paginate_items(tags, page)
@@ -722,8 +781,11 @@ async def pagination_callback(callback_query: types.CallbackQuery, state: FSMCon
         await state.finish()
         return
     
-    moscow_time = datetime.now(TIMEZONE).strftime("%H:%M")
-    await send_clients_page(callback_query, user_id, tags, page, moscow_time)
+    last_update = get_last_update_time()
+    if not last_update:
+        last_update = "еще не обновлялось"
+    
+    await send_clients_page(callback_query, user_id, tags, page, last_update)
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "refresh", state=ClientListState.viewing)
@@ -739,9 +801,12 @@ async def refresh_callback(callback_query: types.CallbackQuery, state: FSMContex
     
     await state.update_data(clients_list=tags)
     
-    moscow_time = datetime.now(TIMEZONE).strftime("%H:%M")
+    last_update = get_last_update_time()
+    if not last_update:
+        last_update = "еще не обновлялось"
+    
     page = 1
-    await send_clients_page(callback_query, user_id, tags, page, moscow_time)
+    await send_clients_page(callback_query, user_id, tags, page, last_update)
     await callback_query.answer("🔄 Список обновлен!")
 
 @dp.callback_query_handler(lambda c: c.data == "close", state=ClientListState.viewing)
