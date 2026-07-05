@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
@@ -32,6 +32,7 @@ class AdminAddProfit(StatesGroup):
     waiting_for_tag = State()
     waiting_for_usd = State()
     waiting_for_rub = State()
+    waiting_for_message = State()
 
 class MarkUnsubscribed(StatesGroup):
     waiting_for_selection = State()
@@ -79,6 +80,7 @@ def init_db():
         amount_usd REAL,
         amount_rub REAL,
         profit REAL,
+        message TEXT,
         payment_date TEXT,
         FOREIGN KEY (tag_id) REFERENCES tags (id)
     )
@@ -205,11 +207,11 @@ def get_all_user_tags_with_status(user_id):
     conn.close()
     return tags
 
-def add_payment(tag_id, amount_usd, amount_rub, profit):
+def add_payment(tag_id, amount_usd, amount_rub, profit, message=""):
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO payments (tag_id, amount_usd, amount_rub, profit, payment_date) VALUES (?, ?, ?, ?, ?)", 
-                  (tag_id, amount_usd, amount_rub, profit, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    cursor.execute("INSERT INTO payments (tag_id, amount_usd, amount_rub, profit, message, payment_date) VALUES (?, ?, ?, ?, ?, ?)", 
+                  (tag_id, amount_usd, amount_rub, profit, message, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     conn.close()
 
@@ -418,7 +420,7 @@ def get_main_keyboard(user_id):
             KeyboardButton("🔍 Проверить тег"),
             KeyboardButton("💸 Списать переведенных")
         ]
-        buttons_row5 = [KeyboardButton("📈 Личная статистика")]
+        buttons_row5 = [KeyboardButton("📊 Личная статистика")]
         
         keyboard.row(*buttons_row1)
         keyboard.row(*buttons_row2)
@@ -428,7 +430,7 @@ def get_main_keyboard(user_id):
     else:
         buttons_row1 = [KeyboardButton("📝 Добавить мамонта")]
         buttons_row2 = [KeyboardButton("👥 Мои мамонты")]
-        buttons_row3 = [KeyboardButton("📈 Личная статистика")]
+        buttons_row3 = [KeyboardButton("📊 Личная статистика")]
         
         keyboard.row(*buttons_row1)
         keyboard.row(*buttons_row2)
@@ -450,6 +452,23 @@ async def back_to_menu(message: types.Message, state: FSMContext):
         "Также сюда приходят уведомления о профите 💰",
         reply_markup=get_main_keyboard(user_id)
     )
+
+# Функция для отправки напоминания админу
+async def send_reminder():
+    while True:
+        now = datetime.now(TIMEZONE)
+        # Проверяем рабочее время (10:00 - 22:00)
+        if 10 <= now.hour < 22:
+            try:
+                await bot.send_message(
+                    ADMIN_ID,
+                    "🔔 Напоминание!\n\n"
+                    "Проверьте отписки мамонтов 📌\n"
+                    "Возможно, кто-то отписался и нужно отметить."
+                )
+            except Exception as e:
+                logging.error(f"Ошибка отправки напоминания: {e}")
+        await asyncio.sleep(1800)  # 30 минут
 
 # Обработчики команд
 @dp.message_handler(commands=["start"])
@@ -572,7 +591,7 @@ async def admin_process_tag(message: types.Message, state: FSMContext):
         await message.answer("❌ Тег не найден! Введите существующий тег:")
         return
     
-    await state.update_data(tag_id=tag[0])
+    await state.update_data(tag_id=tag[0], tag_name=tag[1])
     await AdminAddProfit.waiting_for_usd.set()
     await message.answer("Введите сумму в $:")
 
@@ -598,39 +617,59 @@ async def admin_process_rub(message: types.Message, state: FSMContext):
     
     try:
         amount_rub = float(message.text.replace(',', '.'))
-        data = await state.get_data()
-        tag_id = data['tag_id']
-        amount_usd = data['amount_usd']
-        
-        profit_rub = calculate_profit(amount_rub)
-        profit_usd = (profit_rub / amount_rub) * amount_usd if amount_rub > 0 else 0
-        
-        add_payment(tag_id, amount_usd, amount_rub, profit_rub)
-        
-        conn = sqlite3.connect('bot_database.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM tags WHERE id = ?", (tag_id,))
-        user_id = cursor.fetchone()[0]
-        conn.close()
-        
-        await bot.send_message(
-            user_id,
-            f"💰 Новый профит!\n\n"
-            f"💵 Сумма: {amount_rub}₽\n"
-            f"💲 Твоя выплата: {profit_usd:.2f}$"
-        )
-        
-        await state.finish()
-        await message.answer(
-            f"✅ Профит успешно добавлен!\n\n"
-            f"💵 Сумма в $: {amount_usd}$\n"
-            f"💵 Сумма в ₽: {amount_rub}₽\n"
-            f"💲 Выплата: {profit_usd:.2f}$",
-            reply_markup=get_main_keyboard(ADMIN_ID)
-        )
-        
+        await state.update_data(amount_rub=amount_rub)
+        await AdminAddProfit.waiting_for_message.set()
+        await message.answer("Введите сообщение для воркера (можно пропустить, отправив '-'):")
     except ValueError:
         await message.answer("❌ Введите корректное число:")
+
+@dp.message_handler(state=AdminAddProfit.waiting_for_message)
+async def admin_process_message(message: types.Message, state: FSMContext):
+    if message.text == "◀️ Назад":
+        await back_to_menu(message, state)
+        return
+    
+    msg_text = message.text.strip()
+    if msg_text == "-":
+        msg_text = ""
+    
+    data = await state.get_data()
+    tag_id = data['tag_id']
+    tag_name = data['tag_name']
+    amount_usd = data['amount_usd']
+    amount_rub = data['amount_rub']
+    
+    profit_rub = calculate_profit(amount_rub)
+    profit_usd = (profit_rub / amount_rub) * amount_usd if amount_rub > 0 else 0
+    
+    add_payment(tag_id, amount_usd, amount_rub, profit_rub, msg_text)
+    
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM tags WHERE id = ?", (tag_id,))
+    user_id = cursor.fetchone()[0]
+    conn.close()
+    
+    # Отправляем уведомление воркеру
+    notification = f"💰 Новый профит!\n\n"
+    notification += f"🦣 Тег мамонта: {tag_name}\n"
+    notification += f"💵 Сумма: {amount_rub:.0f}₽\n"
+    notification += f"🪎 Твоя выплата: {profit_usd:.2f}$"
+    if msg_text:
+        notification += f"\n\n💬 Сообщение от ТСа: {msg_text}"
+    
+    await bot.send_message(user_id, notification)
+    
+    await state.finish()
+    await message.answer(
+        f"✅ Профит успешно добавлен!\n\n"
+        f"🦣 Тег: {tag_name}\n"
+        f"💵 Сумма в $: {amount_usd:.2f}$\n"
+        f"💵 Сумма в ₽: {amount_rub:.0f}₽\n"
+        f"🪎 Выплата: {profit_usd:.2f}$\n"
+        f"💬 Сообщение: {msg_text if msg_text else 'Отсутствует'}",
+        reply_markup=get_main_keyboard(ADMIN_ID)
+    )
 
 @dp.message_handler(lambda message: message.text == "📌 Отметить отписку")
 async def mark_unsubscribed_start(message: types.Message, state: FSMContext):
@@ -986,7 +1025,7 @@ async def cancel_payoff(callback_query: types.CallbackQuery, state: FSMContext):
         reply_markup=get_main_keyboard(callback_query.from_user.id)
     )
 
-@dp.message_handler(lambda message: message.text == "📈 Личная статистика")
+@dp.message_handler(lambda message: message.text == "📊 Личная статистика")
 async def personal_stats(message: types.Message):
     user_id = message.from_user.id
     stats = get_user_stats(user_id)
@@ -1020,7 +1059,6 @@ async def team_stats(message: types.Message):
     
     await message.answer(text, reply_markup=get_main_keyboard(user_id))
 
-# Обработчик для любых других сообщений
 @dp.message_handler()
 async def handle_other_messages(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
@@ -1043,4 +1081,9 @@ async def handle_other_messages(message: types.Message, state: FSMContext):
 if __name__ == "__main__":
     init_db()
     print("🚀 Бот запущен!")
+    
+    # Запускаем задачу с напоминаниями
+    loop = asyncio.get_event_loop()
+    loop.create_task(send_reminder())
+    
     executor.start_polling(dp, skip_updates=True)
