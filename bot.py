@@ -1034,7 +1034,7 @@ async def personal_stats(message: types.Message):
     text += f"💵 Сумма профитов: ${stats['total_profit_usd']:.2f}\n"
     text += f"🦣 Количество мамонтов: {stats['clients_count']}\n"
     text += f"📝 Количество переведенных: {stats['unsubscribed_count']}\n"
-    text += f"🗂️ Оплата за переведенных: ${stats['refund_amount']:.2f}\n"
+    text += f"🗂️ Баланс за переведенных: ${stats['refund_amount']:.2f}\n"
     text += f"💸 Заработок с переведенных: ${stats['total_payoffs']:.2f}"
     
     await message.answer(text, reply_markup=get_main_keyboard(user_id))
