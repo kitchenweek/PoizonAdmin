@@ -103,7 +103,6 @@ def init_db():
     )
     ''')
     
-    # Добавляем поле для времени последнего обновления
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
@@ -118,7 +117,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Функции для работы с настройками
 def get_last_update_time():
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
@@ -222,7 +220,6 @@ def add_unsubscribed(tag_id):
                   (tag_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     conn.close()
-    # Обновляем время последнего обновления
     set_last_update_time(datetime.now(TIMEZONE).strftime("%H:%M"))
 
 def get_unsubscribed_tags():
@@ -401,7 +398,7 @@ def get_pagination_keyboard(current_page, total_pages):
     keyboard.row(InlineKeyboardButton("❌ Закрыть", callback_data="close"))
     return keyboard
 
-# Меню с кнопкой "Назад"
+# Меню
 def get_main_keyboard(user_id):
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
     user = get_user(user_id)
@@ -440,7 +437,7 @@ def get_main_keyboard(user_id):
     return keyboard
 
 # Обработчик кнопки "Назад"
-@dp.message_handler(lambda message: message.text == "◀️ Назад" or message.text == "Назад")
+@dp.message_handler(lambda message: message.text == "◀️ Назад")
 async def back_to_menu(message: types.Message, state: FSMContext):
     await state.finish()
     user_id = message.from_user.id
@@ -453,34 +450,6 @@ async def back_to_menu(message: types.Message, state: FSMContext):
         "Также сюда приходят уведомления о профите 💰",
         reply_markup=get_main_keyboard(user_id)
     )
-
-# Обработчик для прерывания состояний при нажатии на кнопки
-@dp.message_handler(lambda message: message.text in ["📝 Добавить мамонта", "💰 Добавить профит", "📌 Отметить отписку", "👥 Мои мамонты", "🔍 Проверить тег", "💸 Списать переведенных", "📈 Личная статистика", "📊 Статистика команды"], state='*')
-async def interrupt_state(message: types.Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state is not None:
-        await state.finish()
-        # Передаем управление дальше
-        await process_button(message, state)
-
-async def process_button(message: types.Message, state: FSMContext):
-    text = message.text
-    if text == "📝 Добавить мамонта":
-        await add_tag_start(message)
-    elif text == "💰 Добавить профит":
-        await admin_add_profit_start(message)
-    elif text == "📌 Отметить отписку":
-        await mark_unsubscribed_start(message, state)
-    elif text == "👥 Мои мамонты":
-        await view_all_clients(message, state)
-    elif text == "🔍 Проверить тег":
-        await check_tag_start(message)
-    elif text == "💸 Списать переведенных":
-        await payoff_start(message)
-    elif text == "📈 Личная статистика":
-        await personal_stats(message)
-    elif text == "📊 Статистика команды":
-        await team_stats(message)
 
 # Обработчики команд
 @dp.message_handler(commands=["start"])
@@ -511,11 +480,13 @@ async def start_state_handler(message: types.Message, state: FSMContext):
 @dp.message_handler(lambda message: message.text == "📝 Добавить мамонта")
 async def add_tag_start(message: types.Message):
     await AddTagStates.waiting_for_tag_and_deadline.set()
+    back_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    back_keyboard.add(KeyboardButton("◀️ Назад"))
     await message.answer(
         "Введите тег мамонта и срок одним сообщением:\n"
         "Формат: @user ДД.ММ\n"
         "Пример: @username 31.12",
-        reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton("◀️ Назад"))
+        reply_markup=back_keyboard
     )
 
 @dp.message_handler(state=AddTagStates.waiting_for_tag_and_deadline)
@@ -581,9 +552,11 @@ async def admin_add_profit_start(message: types.Message):
         return
     
     await AdminAddProfit.waiting_for_tag.set()
+    back_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    back_keyboard.add(KeyboardButton("◀️ Назад"))
     await message.answer(
         "Введите тег мамонта:",
-        reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton("◀️ Назад"))
+        reply_markup=back_keyboard
     )
 
 @dp.message_handler(state=AdminAddProfit.waiting_for_tag)
@@ -682,7 +655,9 @@ async def mark_unsubscribed_start(message: types.Message, state: FSMContext):
     
     await state.update_data(tags_list=unsubscribed_tags)
     await MarkUnsubscribed.waiting_for_selection.set()
-    await message.answer(tags_list, reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton("◀️ Назад")))
+    back_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    back_keyboard.add(KeyboardButton("◀️ Назад"))
+    await message.answer(tags_list, reply_markup=back_keyboard)
 
 @dp.message_handler(state=MarkUnsubscribed.waiting_for_selection)
 async def process_unsubscribed_selection(message: types.Message, state: FSMContext):
@@ -729,7 +704,6 @@ async def view_all_clients(message: types.Message, state: FSMContext):
     await state.update_data(clients_list=tags)
     await ClientListState.viewing.set()
     
-    # Получаем время последнего обновления
     last_update = get_last_update_time()
     if not last_update:
         last_update = "еще не обновлялось"
@@ -836,9 +810,11 @@ async def check_tag_start(message: types.Message):
         return
     
     await CheckTagState.waiting_for_tag.set()
+    back_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    back_keyboard.add(KeyboardButton("◀️ Назад"))
     await message.answer(
         "Введите тег для проверки:",
-        reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton("◀️ Назад"))
+        reply_markup=back_keyboard
     )
 
 @dp.message_handler(state=CheckTagState.waiting_for_tag)
@@ -887,9 +863,11 @@ async def payoff_start(message: types.Message):
         return
     
     await PayoffState.waiting_for_worker_tag.set()
+    back_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    back_keyboard.add(KeyboardButton("◀️ Назад"))
     await message.answer(
         "Введите тег воркера (например: @username):",
-        reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton("◀️ Назад"))
+        reply_markup=back_keyboard
     )
 
 @dp.message_handler(state=PayoffState.waiting_for_worker_tag)
@@ -903,7 +881,6 @@ async def payoff_process_worker(message: types.Message, state: FSMContext):
     if not worker_tag.startswith('@'):
         worker_tag = '@' + worker_tag
     
-    # Ищем воркера
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, username FROM users WHERE username LIKE ?", (f"%{worker_tag[1:]}%",))
@@ -915,8 +892,6 @@ async def payoff_process_worker(message: types.Message, state: FSMContext):
         return
     
     worker_id, worker_username = worker
-    
-    # Считаем сумму за отписавшихся
     amount = get_worker_unsubscribed_amount(worker_id)
     
     if amount == 0:
@@ -967,7 +942,6 @@ async def confirm_payoff(callback_query: types.CallbackQuery, state: FSMContext)
         await callback_query.answer()
         return
     
-    # Сохраняем списание
     add_payoff(worker_id, amount)
     
     await state.finish()
@@ -978,7 +952,6 @@ async def confirm_payoff(callback_query: types.CallbackQuery, state: FSMContext)
         f"📅 Дата: {datetime.now(TIMEZONE).strftime('%d.%m.%Y %H:%M')}"
     )
     
-    # Отправляем уведомление воркеру
     await bot.send_message(
         worker_id,
         f"📢 Вам начислена выплата за переведенных мамонтов!\n\n"
@@ -1047,14 +1020,23 @@ async def team_stats(message: types.Message):
     
     await message.answer(text, reply_markup=get_main_keyboard(user_id))
 
-@dp.message_handler(state='*')
-async def handle_all_states(message: types.Message, state: FSMContext):
+# Обработчик для любых других сообщений
+@dp.message_handler()
+async def handle_other_messages(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state is not None:
-        await state.finish()
+        await message.answer(
+            "⏳ Пожалуйста, завершите текущее действие или нажмите '◀️ Назад'"
+        )
+    else:
         user_id = message.from_user.id
         await message.answer(
-            "🔄 Действие отменено. Возврат в главное меню.",
+            "👋 Добро пожаловать в главное меню!\n\n"
+            "Используй кнопки, чтобы:\n"
+            "🦣 Ввести тег мамонта\n"
+            "🔎 Проверить мамонтов\n"
+            "📊 Посмотреть свою статистику\n\n"
+            "Также сюда приходят уведомления о профите 💰",
             reply_markup=get_main_keyboard(user_id)
         )
 
