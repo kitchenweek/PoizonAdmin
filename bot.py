@@ -927,6 +927,7 @@ async def cancel_command(message: types.Message):
 
 @dp.message_handler(commands=["random"])
 async def random_payments_command(message: types.Message):
+    """Генерирует случайные профиты для тестов"""
     user_id = message.from_user.id
     user = get_user(user_id)
     
@@ -934,6 +935,9 @@ async def random_payments_command(message: types.Message):
         await message.answer("❌ У вас нет прав для этого действия!")
         return
     
+    await message.answer("🔄 Начинаю генерацию случайных профитов...")
+    
+    # Получаем все активные теги
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute("SELECT id, tag, user_id FROM tags WHERE is_active = 1 AND show_in_profit = 1")
@@ -944,6 +948,7 @@ async def random_payments_command(message: types.Message):
         await message.answer("❌ Нет активных тегов для генерации профитов!\n\nДобавьте хотя бы одного мамонта через /add или кнопку 'Добавить мамонта'")
         return
     
+    # Генерируем от 5 до 12 оплат
     count = random.randint(5, 12)
     payments = generate_random_payments(count)
     
@@ -958,6 +963,7 @@ async def random_payments_command(message: types.Message):
         add_payment(tag_id, amount_usd, amount_rub, profit_rub, "Автоматическая генерация")
         created += 1
         
+        # Отправляем уведомление воркеру
         try:
             await bot.send_message(
                 worker_id,
@@ -967,8 +973,8 @@ async def random_payments_command(message: types.Message):
                 f"🪎 Твоя выплата: {profit_usd:.2f}$\n\n"
                 f"💬 Сообщение от системы: Автоматическая генерация"
             )
-        except:
-            pass
+        except Exception as e:
+            logging.error(f"Ошибка отправки уведомления: {e}")
         
         await asyncio.sleep(0.1)
     
@@ -976,11 +982,13 @@ async def random_payments_command(message: types.Message):
         f"✅ Сгенерировано {created} профитов!\n\n"
         f"📊 Диапазон сумм: 4000-70000₽\n"
         f"🎯 Количество: 5-12 в день\n"
-        f"🦣 Теги использованы: {len(tags)}"
+        f"🦣 Теги использованы: {len(tags)}\n\n"
+        f"💡 Проверьте статистику командой /stats или /restats"
     )
 
 @dp.message_handler(commands=["restats"])
 async def real_stats_command(message: types.Message):
+    """Показывает реальную статистику (без тестовых данных)"""
     user_id = message.from_user.id
     user = get_user(user_id)
     
@@ -991,9 +999,11 @@ async def real_stats_command(message: types.Message):
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     
+    # Проверяем есть ли вообще данные
     cursor.execute("SELECT COUNT(*) FROM payments")
     total_all = cursor.fetchone()[0]
     
+    # Реальная статистика без тестовых
     cursor.execute("SELECT COUNT(*) FROM payments WHERE message != 'Автоматическая генерация' OR message IS NULL")
     real_payments = cursor.fetchone()[0]
     
@@ -1018,6 +1028,7 @@ async def real_stats_command(message: types.Message):
     cursor.execute("SELECT COUNT(*) FROM unsubscribed")
     real_unsubscribed = cursor.fetchone()[0]
     
+    # Считаем тестовые данные
     test_payments = total_all - real_payments
     cursor.execute("SELECT SUM(amount_usd) FROM payments WHERE message = 'Автоматическая генерация'")
     test_amount_usd = cursor.fetchone()[0] or 0
