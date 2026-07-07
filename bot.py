@@ -1734,3 +1734,5 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.create_task(send_reminder())
     loop.create_task(check_deadlines())
+    
+    executor.start_polling(dp, skip_updates=True)
