@@ -67,16 +67,14 @@ def get_current_time():
 
 def generate_random_payment():
     """Генерирует случайную оплату от 4000 до 70000 с весами"""
-    # Определяем диапазоны с весами
     ranges = [
-        (4000, 8000, 30),    # 30% шанс
-        (8000, 15000, 35),   # 35% шанс
-        (15000, 25000, 20),  # 20% шанс
-        (25000, 40000, 10),  # 10% шанс
-        (40000, 70000, 5)    # 5% шанс
+        (4000, 8000, 30),
+        (8000, 15000, 35),
+        (15000, 25000, 20),
+        (25000, 40000, 10),
+        (40000, 70000, 5)
     ]
     
-    # Выбираем диапазон по весу
     total_weight = sum(w for _, _, w in ranges)
     r = random.randint(1, total_weight)
     cumulative = 0
@@ -91,7 +89,6 @@ def generate_random_payments(count):
     payments = []
     for _ in range(count):
         amount = generate_random_payment()
-        # Курс рубля к доллару (примерный)
         usd_rate = random.uniform(85, 95)
         usd_amount = round(amount / usd_rate, 2)
         payments.append((amount, usd_amount))
@@ -316,7 +313,6 @@ def get_unsubscribed_tags():
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     
-    # Автоудаление тегов сроком 2 месяца
     two_months_ago = (get_current_time() - timedelta(days=60)).strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute('''
     UPDATE tags 
@@ -325,7 +321,6 @@ def get_unsubscribed_tags():
     ''', (two_months_ago,))
     conn.commit()
     
-    # Удаление тегов с истекшим сроком
     cursor.execute('''
     UPDATE tags 
     SET is_active = 0 
@@ -572,7 +567,6 @@ def get_all_unsubscribed_tags():
     
     today = get_current_time().strftime("%d.%m")
     
-    # Автоудаление тегов сроком 2 месяца
     two_months_ago = (get_current_time() - timedelta(days=60)).strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute('''
     UPDATE tags 
@@ -817,7 +811,6 @@ async def add_command(message: types.Message):
 
 @dp.message_handler(commands=["addone"])
 async def add_one_command(message: types.Message):
-    """Команда для добавления одного тега (для ПК пользователей)"""
     user_id = message.from_user.id
     user = get_user(user_id)
     
@@ -934,7 +927,6 @@ async def cancel_command(message: types.Message):
 
 @dp.message_handler(commands=["random"])
 async def random_payments_command(message: types.Message):
-    """Генерирует случайные профиты для тестов"""
     user_id = message.from_user.id
     user = get_user(user_id)
     
@@ -942,7 +934,6 @@ async def random_payments_command(message: types.Message):
         await message.answer("❌ У вас нет прав для этого действия!")
         return
     
-    # Получаем все активные теги
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute("SELECT id, tag, user_id FROM tags WHERE is_active = 1 AND show_in_profit = 1")
@@ -950,16 +941,14 @@ async def random_payments_command(message: types.Message):
     conn.close()
     
     if not tags:
-        await message.answer("❌ Нет активных тегов для генерации профитов!")
+        await message.answer("❌ Нет активных тегов для генерации профитов!\n\nДобавьте хотя бы одного мамонта через /add или кнопку 'Добавить мамонта'")
         return
     
-    # Генерируем от 5 до 12 оплат
     count = random.randint(5, 12)
     payments = generate_random_payments(count)
     
     created = 0
     for amount_rub, amount_usd in payments:
-        # Выбираем случайный тег
         tag = random.choice(tags)
         tag_id, tag_name, worker_id = tag
         
@@ -969,7 +958,6 @@ async def random_payments_command(message: types.Message):
         add_payment(tag_id, amount_usd, amount_rub, profit_rub, "Автоматическая генерация")
         created += 1
         
-        # Отправляем уведомление воркеру
         try:
             await bot.send_message(
                 worker_id,
@@ -981,16 +969,18 @@ async def random_payments_command(message: types.Message):
             )
         except:
             pass
+        
+        await asyncio.sleep(0.1)
     
     await message.answer(
         f"✅ Сгенерировано {created} профитов!\n\n"
         f"📊 Диапазон сумм: 4000-70000₽\n"
-        f"🎯 Количество: 5-12 в день"
+        f"🎯 Количество: 5-12 в день\n"
+        f"🦣 Теги использованы: {len(tags)}"
     )
 
 @dp.message_handler(commands=["restats"])
 async def real_stats_command(message: types.Message):
-    """Показывает реальную статистику (без тестовых данных)"""
     user_id = message.from_user.id
     user = get_user(user_id)
     
@@ -1001,20 +991,22 @@ async def real_stats_command(message: types.Message):
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     
-    # Реальная статистика без тестовых
-    cursor.execute("SELECT COUNT(*) FROM payments WHERE message != 'Автоматическая генерация'")
+    cursor.execute("SELECT COUNT(*) FROM payments")
+    total_all = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM payments WHERE message != 'Автоматическая генерация' OR message IS NULL")
     real_payments = cursor.fetchone()[0]
     
-    cursor.execute("SELECT SUM(amount_rub) FROM payments WHERE message != 'Автоматическая генерация'")
+    cursor.execute("SELECT SUM(amount_rub) FROM payments WHERE message != 'Автоматическая генерация' OR message IS NULL")
     real_amount_rub = cursor.fetchone()[0] or 0
     
-    cursor.execute("SELECT SUM(amount_usd) FROM payments WHERE message != 'Автоматическая генерация'")
+    cursor.execute("SELECT SUM(amount_usd) FROM payments WHERE message != 'Автоматическая генерация' OR message IS NULL")
     real_amount_usd = cursor.fetchone()[0] or 0
     
-    cursor.execute("SELECT SUM(profit) FROM payments WHERE message != 'Автоматическая генерация'")
+    cursor.execute("SELECT SUM(profit) FROM payments WHERE message != 'Автоматическая генерация' OR message IS NULL")
     real_profit_rub = cursor.fetchone()[0] or 0
     
-    cursor.execute("SELECT SUM(amount_usd * profit / amount_rub) FROM payments WHERE message != 'Автоматическая генерация' AND amount_rub > 0")
+    cursor.execute("SELECT SUM(amount_usd * profit / amount_rub) FROM payments WHERE (message != 'Автоматическая генерация' OR message IS NULL) AND amount_rub > 0")
     real_profit_usd = cursor.fetchone()[0] or 0
     
     cursor.execute("SELECT COUNT(DISTINCT user_id) FROM tags WHERE is_active = 1 AND show_in_profit = 1")
@@ -1026,6 +1018,10 @@ async def real_stats_command(message: types.Message):
     cursor.execute("SELECT COUNT(*) FROM unsubscribed")
     real_unsubscribed = cursor.fetchone()[0]
     
+    test_payments = total_all - real_payments
+    cursor.execute("SELECT SUM(amount_usd) FROM payments WHERE message = 'Автоматическая генерация'")
+    test_amount_usd = cursor.fetchone()[0] or 0
+    
     conn.close()
     
     text = f"📊 РЕАЛЬНАЯ СТАТИСТИКА (без тестовых данных):\n\n"
@@ -1034,7 +1030,10 @@ async def real_stats_command(message: types.Message):
     text += f"💵 Общая сумма профитов: ${real_profit_usd:.2f}\n"
     text += f"🦣 Всего мамонтов: {real_clients}\n"
     text += f"📉 Всего отписавшихся: {real_unsubscribed}\n"
-    text += f"📊 Количество профитов: {real_payments}"
+    text += f"📊 Количество профитов: {real_payments}\n\n"
+    
+    if test_payments > 0:
+        text += f"🧪 Тестовых профитов: {test_payments} (${test_amount_usd:.2f})"
     
     await message.answer(text, reply_markup=get_main_keyboard(user_id))
 
@@ -1047,7 +1046,6 @@ async def checkmsg_command(message: types.Message):
         await message.answer("❌ У вас нет прав для этого действия!")
         return
     
-    # Вызываем полный цикл отметки отписок
     await mark_unsubscribed_start(message, None)
 
 @dp.message_handler(commands=["time"])
@@ -1120,12 +1118,9 @@ async def process_bulk_tags(message: types.Message, state: FSMContext):
         await back_to_menu(message, state)
         return
     
-    # Логируем для отладки
     logging.info(f"Получено сообщение: {repr(message.text)}")
     
-    # Обработка переносов строк для разных платформ
     text = message.text.strip()
-    # Разделяем по переносам строк (поддерживает \n, \r\n, \r)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     
     logging.info(f"Разбито на строки: {lines}")
@@ -1135,18 +1130,14 @@ async def process_bulk_tags(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     
     for line in lines:
-        # Разделяем по пробелам
         parts = line.split()
         if len(parts) < 2:
             errors.append(f"❌ {line} - неверный формат")
             continue
         
         tag = parts[0]
-        
-        # Удаляем лишние символы из тега
         tag = tag.strip()
         
-        # Если тег не начинается с @, но содержит @ внутри - берем первую часть с @
         if not tag.startswith('@') and '@' in tag:
             for part in parts:
                 if part.startswith('@'):
@@ -1157,7 +1148,6 @@ async def process_bulk_tags(message: types.Message, state: FSMContext):
             errors.append(f"❌ {line} - тег должен начинаться с @")
             continue
         
-        # Собираем дату из оставшихся частей
         line_parts = line.split()
         tag_index = 0
         for i, part in enumerate(line_parts):
@@ -1172,14 +1162,12 @@ async def process_bulk_tags(message: types.Message, state: FSMContext):
         
         deadline = ' '.join(deadline_parts)
         
-        # Проверяем формат даты
         try:
             datetime.strptime(deadline, "%d.%m")
         except ValueError:
             errors.append(f"❌ {line} - неверный формат даты (нужно ДД.ММ)")
             continue
         
-        # Проверяем существование тега
         conn = sqlite3.connect('bot_database.db')
         cursor = conn.cursor()
         cursor.execute("SELECT id, is_active FROM tags WHERE tag = ?", (tag,))
@@ -1189,7 +1177,6 @@ async def process_bulk_tags(message: types.Message, state: FSMContext):
         if existing:
             tag_id, is_active = existing
             if is_active == 0:
-                # Восстанавливаем тег
                 conn = sqlite3.connect('bot_database.db')
                 cursor = conn.cursor()
                 cursor.execute("UPDATE tags SET is_active = 1, show_in_profit = 1, deadline = ?, hidden_until = '' WHERE id = ?", 
@@ -1527,7 +1514,6 @@ async def hide_tag_callback(callback_query: types.CallbackQuery, state: FSMConte
     tag_id = all_tags[index][0]
     tag_name = all_tags[index][1]
     
-    # Удаляем сообщение с тегом
     try:
         await callback_query.message.delete()
     except:
@@ -1536,7 +1522,6 @@ async def hide_tag_callback(callback_query: types.CallbackQuery, state: FSMConte
     await state.update_data(hide_tag_id=tag_id, hide_tag_name=tag_name)
     await HideTagState.waiting_for_hours.set()
     
-    # Отправляем запрос на ввод часов
     await bot.send_message(
         user_id,
         f"🙈 Скрыть тег {tag_name}\n\n"
@@ -1578,7 +1563,6 @@ async def process_hide_hours(message: types.Message, state: FSMContext):
             f"Он не будет показываться в проверке отписок до { (get_current_time() + timedelta(hours=hours)).strftime('%d.%m.%Y %H:%M') }"
         )
         
-        # Перезапускаем процесс с обновленным списком
         if user_id in marked_tags:
             del marked_tags[user_id]
         
