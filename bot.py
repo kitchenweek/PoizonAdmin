@@ -927,7 +927,7 @@ async def cancel_command(message: types.Message):
 
 @dp.message_handler(commands=["random"])
 async def random_payments_command(message: types.Message):
-    """Генерирует случайные профиты для тестов"""
+    """Генерирует случайные профиты для тестов (только для статистики)"""
     user_id = message.from_user.id
     user = get_user(user_id)
     
@@ -935,18 +935,7 @@ async def random_payments_command(message: types.Message):
         await message.answer("❌ У вас нет прав для этого действия!")
         return
     
-    await message.answer("🔄 Начинаю генерацию случайных профитов...")
-    
-    # Получаем все активные теги
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, tag, user_id FROM tags WHERE is_active = 1 AND show_in_profit = 1")
-    tags = cursor.fetchall()
-    conn.close()
-    
-    if not tags:
-        await message.answer("❌ Нет активных тегов для генерации профитов!\n\nДобавьте хотя бы одного мамонта через /add или кнопку 'Добавить мамонта'")
-        return
+    await message.answer("🔄 Начинаю генерацию случайных профитов для статистики...")
     
     # Генерируем от 5 до 12 оплат
     count = random.randint(5, 12)
@@ -954,35 +943,19 @@ async def random_payments_command(message: types.Message):
     
     created = 0
     for amount_rub, amount_usd in payments:
-        tag = random.choice(tags)
-        tag_id, tag_name, worker_id = tag
-        
         profit_rub = calculate_profit(amount_rub)
         profit_usd = round(profit_rub / (amount_rub / amount_usd), 2)
         
-        add_payment(tag_id, amount_usd, amount_rub, profit_rub, "Автоматическая генерация")
+        # Добавляем платеж без привязки к тегу (tag_id = 0)
+        add_payment(0, amount_usd, amount_rub, profit_rub, "Автоматическая генерация")
         created += 1
         
-        # Отправляем уведомление воркеру
-        try:
-            await bot.send_message(
-                worker_id,
-                f"💰 Новый профит!\n\n"
-                f"🦣 Тег мамонта: {tag_name}\n"
-                f"💵 Сумма: {amount_rub:.0f}₽\n"
-                f"🪎 Твоя выплата: {profit_usd:.2f}$\n\n"
-                f"💬 Сообщение от системы: Автоматическая генерация"
-            )
-        except Exception as e:
-            logging.error(f"Ошибка отправки уведомления: {e}")
-        
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
     
     await message.answer(
-        f"✅ Сгенерировано {created} профитов!\n\n"
+        f"✅ Сгенерировано {created} профитов для статистики!\n\n"
         f"📊 Диапазон сумм: 4000-70000₽\n"
-        f"🎯 Количество: 5-12 в день\n"
-        f"🦣 Теги использованы: {len(tags)}\n\n"
+        f"🎯 Количество: {count} шт\n"
         f"💡 Проверьте статистику командой /stats или /restats"
     )
 
